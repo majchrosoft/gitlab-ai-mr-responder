@@ -1,0 +1,18 @@
+gitlab:
+  url: "https://gitlab.example.com"
+  token_env: "GITLAB_TOKEN"
+
+projects:
+  - "group/project-one"
+  - "group/project-two"
+
+opencode:
+  command: "opencode"
+
+limits:
+  max_auto_iterations_per_discussion: 2
+  max_total_iterations_per_discussion: 10
+  max_ai_commits_per_merge_request: 5
+
+state:
+  file: "data/state.json"

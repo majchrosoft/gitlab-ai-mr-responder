@@ -1,0 +1,42 @@
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Runtime data
+data/
+logs/
+repos/
+
+# Local IDE / OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# Local databases / state
+*.sqlite
+*.sqlite3
+
+# OS / editor
+Thumbs.db

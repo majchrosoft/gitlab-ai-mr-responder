@@ -1,0 +1,15 @@
+[project]
+name = "gitlab-ai-mr-responder"
+version = "0.1.0"
+description = "AI agent for handling GitLab Merge Request review comments"
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+gitlab-ai-mr-responder = "src.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
