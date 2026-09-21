@@ -220,9 +220,12 @@ class GitLabClient:
             (
                 f"/projects/{project_id}"
                 f"/merge_requests/{merge_request_iid}"
-                f"/discussions/{quote(discussion_id, safe='')}"
+                "/notes"
             ),
-            json={"body": body},
+            json={
+                "body": body,
+                "discussion_id": discussion_id,
+            },
         )
 
         if isinstance(data, dict) and data.get("id") is not None:
