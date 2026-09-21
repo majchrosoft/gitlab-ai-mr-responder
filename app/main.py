@@ -592,6 +592,26 @@ def format_no_change_comment(
     )
 
 
+def format_fix_comment(
+    agent_report: str,
+    changed_files: list[str],
+    commit_sha: str,
+) -> str:
+    changed_files_text = "\n".join(
+        f"- {changed_file}"
+        for changed_file in changed_files
+    )
+
+    return (
+        f"{AI_COMMENT_MARKER}\n\n"
+        "The AI responder applied a fix. "
+        "Changed files:\n"
+        f"{changed_files_text}\n\n"
+        f"Commit: {commit_sha}\n\n"
+        f"Agent report:\n{agent_report}"
+    )
+
+
 def run_agent(
     config: Config,
     repository_manager: RepositoryManager,
@@ -768,7 +788,12 @@ def run_agent(
     )
 
     return AgentOutcome(
-        commit_sha=push_result.commit_sha
+        commit_sha=push_result.commit_sha,
+        comment=format_fix_comment(
+            agent_report=agent_report,
+            changed_files=changes.changed_files,
+            commit_sha=push_result.commit_sha,
+        ),
     )
 
 
