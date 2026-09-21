@@ -126,17 +126,9 @@ class TestRunner:
             print()
             print("      → Tests FAILED")
 
-        self._run_after_run_command(
-            working_directory=working_directory,
-            project_directory=project_directory,
-            merge_request_directory=merge_request_directory,
-            merge_request_iid=merge_request_iid,
-            dry_run=dry_run,
-        )
-
         return result
 
-    def _run_after_run_command(
+    def run_after_run_command(
         self,
         working_directory: Path,
         project_directory: Path,

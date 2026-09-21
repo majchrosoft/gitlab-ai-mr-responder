@@ -611,6 +611,7 @@ def format_fix_comment(
     agent_report: str,
     changed_files: list[str],
     commit_sha: str,
+    review_comment: str,
 ) -> str:
     changed_files_text = "\n".join(
         f"- {changed_file}"
@@ -619,11 +620,17 @@ def format_fix_comment(
 
     return (
         f"{AI_COMMENT_MARKER}\n\n"
-        "The AI responder applied a fix. "
-        "Changed files:\n"
+        "**What was improved**\n\n"
+        "This discussion was addressed with a code "
+        "change, pushed and tests passed.\n\n"
+        "Addressed review comment:\n"
+        f"> {review_comment.strip()}\n\n"
+        "**How**\n\n"
+        f"Agent summary of the change:\n\n"
+        f"{agent_report}\n\n"
+        "**Changed files**\n\n"
         f"{changed_files_text}\n\n"
-        f"Commit: {commit_sha}\n\n"
-        f"Agent report:\n{agent_report}"
+        f"Commit: `{commit_sha}`"
     )
 
 
@@ -641,6 +648,7 @@ def run_agent(
     discussion_id: str,
     iteration: int,
     prompt: str,
+    review_comment: str,
 ) -> AgentOutcome:
     repository = prepare_repository(
         repository_manager=repository_manager,
@@ -786,6 +794,14 @@ def run_agent(
         f"{commit_result.commit_sha}"
     )
 
+    test_runner.run_after_run_command(
+        working_directory=repository.path,
+        project_directory=repository.path.parent,
+        merge_request_directory=repository.path,
+        merge_request_iid=merge_request_iid,
+        dry_run=config.runtime.dry_run,
+    )
+
     print()
     print(
         "      Pushing to branch: "
@@ -808,6 +824,7 @@ def run_agent(
             agent_report=agent_report,
             changed_files=changes.changed_files,
             commit_sha=push_result.commit_sha,
+            review_comment=review_comment,
         ),
     )
 
@@ -1095,6 +1112,9 @@ def scan_gitlab(
                             discussion_id=discussion.id,
                             iteration=iteration,
                             prompt=task.prompt,
+                            review_comment=(
+                                decision.note.body
+                            ),
                         )
 
                         if not config.runtime.dry_run:
@@ -1220,6 +1240,9 @@ def scan_gitlab(
                             discussion_id=discussion.id,
                             iteration=iteration,
                             prompt=task.prompt,
+                            review_comment=(
+                                original_comment
+                            ),
                         )
 
                         if not config.runtime.dry_run:
