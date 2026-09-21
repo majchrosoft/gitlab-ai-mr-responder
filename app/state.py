@@ -255,6 +255,13 @@ class StateStore:
     ) -> None:
         discussion.retry_pending = False
 
+    def record_replied(
+        self,
+        discussion: DiscussionState,
+    ) -> None:
+        discussion.status = "replied"
+        discussion.retry_pending = False
+
     def record_commit_started(
         self,
         discussion: DiscussionState,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -17,6 +18,7 @@ if str(APP_ROOT) not in sys.path:
 from dotenv import load_dotenv
 
 from discussion_decision import (
+    AI_COMMENT_MARKER,
     DiscussionAction,
     DiscussionDecisionEngine,
 )
@@ -32,8 +34,8 @@ from prompts import (
     build_fix_prompt,
 )
 from repository_manager import RepositoryManager
-from state import StateStore
-from test_runner import TestRunner
+from state import DiscussionState, StateStore
+from test_runner import TestResult, TestRunner
 
 
 PROJECT_ROOT = APP_ROOT.parent
@@ -413,138 +415,181 @@ def prepare_repository(
     return repository
 
 
-def run_tests_and_push(
-    test_runner: TestRunner,
-    git_manager: GitManager,
-    project_directory: Path,
-    merge_request_directory: Path,
-    merge_request_iid: int,
-    source_branch: str,
-) -> str:
-    test_result = test_runner.run(
-        working_directory=merge_request_directory,
-        project_directory=project_directory,
-        merge_request_directory=merge_request_directory,
-        merge_request_iid=merge_request_iid,
-        dry_run=False,
-    )
-
-    if not test_result.success:
-        raise RuntimeError(
-            "Tests failed."
-        )
-
-    print()
-    print(
-        "      → Tests PASSED"
-    )
-
-    commit_message = (
-        f"fix: address MR !{merge_request_iid} review"
-    )
-
-    print()
-    print(
-        "      Creating commit: "
-        f"{commit_message}"
-    )
-
-    commit_result = git_manager.create_commit(
-        message=commit_message,
-    )
-
-    print()
-    print(
-        "      Commit created: "
-        f"{commit_result.commit_sha}"
-    )
-
-    print()
-    print(
-        "      Pushing to branch: "
-        f"{source_branch}"
-    )
-
-    push_result = git_manager.push_to_branch(
-        branch=source_branch,
-    )
-
-    print()
-    print(
-        "      Push completed: "
-        f"{push_result.commit_sha}"
-    )
-
-    return commit_result.commit_sha
+@dataclass(frozen=True)
+class AgentOutcome:
+    commit_sha: str | None = None
+    comment: str | None = None
 
 
-def retry_failed_tests(
-    test_runner: TestRunner,
+def post_explanation_comment(
+    client: GitLabClient,
+    config: Config,
     state_store: StateStore,
-    discussion_state,
-    merge_request_state,
-    project_path: Path,
+    project_id: int,
     merge_request_iid: int,
-    source_branch: str,
-) -> bool:
-    repository_path = (
-        project_path
-        / str(merge_request_iid)
-    )
-
-    if not repository_path.exists():
-        print(
-            "      → Retry skipped: "
-            "repository does not exist"
-        )
-        return False
-
-    git_manager = GitManager(
-        repository_path=repository_path,
-    )
-
-    print()
-    print(
-        "      → Retrying tests on existing "
-        "working tree"
-    )
+    discussion_state: DiscussionState,
+    discussion_id: str,
+    comment: str,
+) -> None:
+    if config.runtime.dry_run:
+        print()
+        print("      → Dry run: skipping GitLab reply")
+        print(comment)
+        return
 
     try:
-        commit_sha = run_tests_and_push(
-            test_runner=test_runner,
-            git_manager=git_manager,
-            project_directory=project_path,
-            merge_request_directory=repository_path,
+        reply_note_id = client.post_discussion_reply(
+            project_id=project_id,
             merge_request_iid=merge_request_iid,
-            source_branch=source_branch,
+            discussion_id=discussion_id,
+            body=comment,
         )
-    except RuntimeError as exc:
-        print()
+    except GitLabApiError as exc:
         print(
-            f"      → Retry failed: {exc}"
+            "      → Failed to post reply: "
+            f"{exc}"
         )
+        return
 
-        state_store.record_tests_failed(
+    if reply_note_id is not None:
+        state_store.mark_note_processed(
             discussion_state,
+            reply_note_id,
         )
 
-        return False
+    state_store.record_replied(discussion_state)
 
-    state_store.record_ai_commit(
-        merge_request_state,
-        commit_sha,
+    print(
+        "      → Posted explanation reply "
+        f"to discussion {discussion_id}"
     )
 
-    state_store.record_completed_iteration(
-        discussion_state,
-        commit_sha=commit_sha,
+
+def extract_agent_report(stdout: str) -> str:
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return stdout.strip()
+
+    messages = data if isinstance(data, list) else [data]
+
+    texts: list[str] = []
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+
+        if message.get("type") not in {None, "text"}:
+            continue
+
+        parts = message.get("parts")
+
+        if not isinstance(parts, list):
+            continue
+
+        for part in parts:
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "text"
+                and isinstance(part.get("text"), str)
+            ):
+                texts.append(part["text"])
+
+    if texts:
+        return texts[-1].strip()
+
+    return stdout.strip()
+
+
+def summarize_test_failure(
+    test_result: TestResult,
+    max_lines: int = 40,
+) -> str:
+    combined = (
+        (test_result.stdout or "")
+        + "\n"
+        + (test_result.stderr or "")
     )
 
-    state_store.clear_retry_pending(
-        discussion_state,
+    keywords = (
+        "FAILED",
+        "ERROR",
+        "Traceback",
+        "AssertionError",
+        "assert",
+        "Error",
+        "error",
+        "failed",
+        "Failed",
+        "not ok",
+        "✗",
+        "×",
+        "tests failed",
+        "tests passed",
+        "failed,",
+        "passed,",
     )
 
-    return True
+    selected: list[str] = []
+
+    for line in combined.splitlines():
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        if any(keyword in line for keyword in keywords):
+            selected.append(stripped)
+
+        if len(selected) >= max_lines:
+            break
+
+    if not selected:
+        lines = [
+            stripped
+            for stripped in (
+                line.strip()
+                for line in combined.splitlines()
+            )
+            if stripped
+        ]
+
+        selected = lines[-max_lines:]
+        selected.append(
+            "(no failure markers detected, "
+            "showing last output lines)"
+        )
+
+    return "\n".join(selected)
+
+
+def format_failure_comment(
+    agent_report: str,
+    test_summary: str,
+) -> str:
+    return (
+        f"{AI_COMMENT_MARKER}\n\n"
+        "The AI responder attempted a fix, "
+        "but the tests did not pass, "
+        "so no changes were pushed.\n\n"
+        "Failed tests:\n"
+        "```\n"
+        f"{test_summary}\n"
+        "```\n\n"
+        f"Agent report:\n{agent_report}"
+    )
+
+
+def format_no_change_comment(
+    agent_report: str,
+) -> str:
+    return (
+        f"{AI_COMMENT_MARKER}\n\n"
+        "The AI responder analyzed this discussion "
+        "and did not change the codebase. "
+        "Explanation:\n\n"
+        f"{agent_report}"
+    )
 
 
 def run_agent(
@@ -561,7 +606,7 @@ def run_agent(
     discussion_id: str,
     iteration: int,
     prompt: str,
-) -> tuple[bool, str | None]:
+) -> AgentOutcome:
     repository = prepare_repository(
         repository_manager=repository_manager,
         project_name=project_name,
@@ -592,7 +637,7 @@ def run_agent(
     )
 
     if config.runtime.dry_run:
-        return True, None
+        return AgentOutcome()
 
     print()
     print(
@@ -620,6 +665,8 @@ def run_agent(
         base_sha=base_sha,
     )
 
+    agent_report = extract_agent_report(result.stdout)
+
     changes = git_manager.get_changes()
 
     if not changes.has_changes:
@@ -629,7 +676,11 @@ def run_agent(
             "the working tree"
         )
 
-        return False, None
+        return AgentOutcome(
+            comment=format_no_change_comment(
+                agent_report
+            )
+        )
 
     print()
     print(
@@ -664,7 +715,16 @@ def run_agent(
             "      → Tests FAILED"
         )
 
-        return False, None
+        test_summary = summarize_test_failure(
+            test_result
+        )
+
+        return AgentOutcome(
+            comment=format_failure_comment(
+                agent_report=agent_report,
+                test_summary=test_summary,
+            )
+        )
 
     print()
     print(
@@ -707,7 +767,9 @@ def run_agent(
         f"{push_result.commit_sha}"
     )
 
-    return True, commit_result.commit_sha
+    return AgentOutcome(
+        commit_sha=push_result.commit_sha
+    )
 
 
 def scan_gitlab(
@@ -868,50 +930,6 @@ def scan_gitlab(
                         f"{discussion_state.status}"
                     )
 
-                    if (
-                        discussion_state.status
-                        == "tests_failed"
-                        or discussion_state.retry_pending
-                    ):
-                        print(
-                            "      → Pending retry: "
-                            "tests"
-                        )
-
-                        project_path = (
-                            PROJECT_ROOT
-                            / "repos"
-                            / project.path
-                        )
-
-                        retry_success = retry_failed_tests(
-                            test_runner=test_runner,
-                            state_store=state_store,
-                            discussion_state=discussion_state,
-                            merge_request_state=(
-                                merge_request_state
-                            ),
-                            project_path=project_path,
-                            merge_request_iid=(
-                                merge_request.iid
-                            ),
-                            source_branch=(
-                                merge_request.source_branch
-                            ),
-                        )
-
-                        if retry_success:
-                            print(
-                                "      → Retry completed successfully"
-                            )
-                        else:
-                            print(
-                                "      → Retry will be attempted "
-                                "again on next run"
-                            )
-
-                        continue
-
                     decision = decision_engine.decide(
                         discussion=discussion,
                         discussion_state=(
@@ -1008,7 +1026,7 @@ def scan_gitlab(
                             ),
                         )
 
-                        success, commit_sha = run_agent(
+                        outcome = run_agent(
                             config=config,
                             repository_manager=(
                                 repository_manager
@@ -1045,20 +1063,35 @@ def scan_gitlab(
                                 decision=decision,
                             )
 
-                            if success:
-                                if commit_sha:
-                                    state_store.record_ai_commit(
-                                        merge_request_state,
-                                        commit_sha,
-                                    )
+                            state_store.record_completed_iteration(
+                                discussion_state,
+                                commit_sha=(
+                                    outcome.commit_sha
+                                ),
+                            )
 
-                                state_store.record_completed_iteration(
-                                    discussion_state,
-                                    commit_sha=commit_sha,
+                            if outcome.commit_sha:
+                                state_store.record_ai_commit(
+                                    merge_request_state,
+                                    outcome.commit_sha,
                                 )
-                            else:
-                                state_store.record_tests_failed(
-                                    discussion_state,
+
+                            if outcome.comment is not None:
+                                post_explanation_comment(
+                                    client=client,
+                                    config=config,
+                                    state_store=state_store,
+                                    project_id=project.id,
+                                    merge_request_iid=(
+                                        merge_request.iid
+                                    ),
+                                    discussion_state=(
+                                        discussion_state
+                                    ),
+                                    discussion_id=(
+                                        discussion.id
+                                    ),
+                                    comment=outcome.comment,
                                 )
 
                     elif (
@@ -1118,7 +1151,7 @@ def scan_gitlab(
                             ),
                         )
 
-                        success, commit_sha = run_agent(
+                        outcome = run_agent(
                             config=config,
                             repository_manager=(
                                 repository_manager
@@ -1155,20 +1188,35 @@ def scan_gitlab(
                                 decision=decision,
                             )
 
-                            if success:
-                                if commit_sha:
-                                    state_store.record_ai_commit(
-                                        merge_request_state,
-                                        commit_sha,
-                                    )
+                            state_store.record_completed_iteration(
+                                discussion_state,
+                                commit_sha=(
+                                    outcome.commit_sha
+                                ),
+                            )
 
-                                state_store.record_completed_iteration(
-                                    discussion_state,
-                                    commit_sha=commit_sha,
+                            if outcome.commit_sha:
+                                state_store.record_ai_commit(
+                                    merge_request_state,
+                                    outcome.commit_sha,
                                 )
-                            else:
-                                state_store.record_tests_failed(
-                                    discussion_state,
+
+                            if outcome.comment is not None:
+                                post_explanation_comment(
+                                    client=client,
+                                    config=config,
+                                    state_store=state_store,
+                                    project_id=project.id,
+                                    merge_request_iid=(
+                                        merge_request.iid
+                                    ),
+                                    discussion_state=(
+                                        discussion_state
+                                    ),
+                                    discussion_id=(
+                                        discussion.id
+                                    ),
+                                    comment=outcome.comment,
                                 )
 
                     elif (

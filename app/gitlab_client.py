@@ -208,6 +208,28 @@ class GitLabClient:
 
         return merge_requests
 
+    def post_discussion_reply(
+        self,
+        project_id: int,
+        merge_request_iid: int,
+        discussion_id: str,
+        body: str,
+    ) -> int | None:
+        data = self._request(
+            "POST",
+            (
+                f"/projects/{project_id}"
+                f"/merge_requests/{merge_request_iid}"
+                f"/discussions/{quote(discussion_id, safe='')}"
+            ),
+            json={"body": body},
+        )
+
+        if isinstance(data, dict) and data.get("id") is not None:
+            return int(data["id"])
+
+        return None
+
     def get_merge_request_discussions(
         self,
         project_id: int,
