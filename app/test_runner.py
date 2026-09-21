@@ -18,8 +18,10 @@ class TestRunner:
     def __init__(
         self,
         command: str,
+        base_path: Path,
     ) -> None:
         self.command = command
+        self.base_path = base_path
 
     def run(
         self,
@@ -45,6 +47,7 @@ class TestRunner:
             project_directory=project_directory,
             merge_request_directory=merge_request_directory,
             merge_request_iid=merge_request_iid,
+            base_path=self.base_path,
         )
 
         if dry_run:
@@ -128,11 +131,14 @@ class TestRunner:
         project_directory: Path,
         merge_request_directory: Path,
         merge_request_iid: int,
+        base_path: Path,
     ) -> str:
         variables = {
             "project_dir": str(project_directory),
+            "project_name": project_directory.name,
             "mr_dir": str(merge_request_directory),
             "mr_iid": str(merge_request_iid),
+            "base_path": str(base_path),
         }
 
         command = self.command

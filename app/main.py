@@ -730,6 +730,7 @@ def scan_gitlab(
 
     test_runner = TestRunner(
         command=config.test.command,
+        base_path=PROJECT_ROOT,
     )
 
     iteration_guard = IterationGuard(

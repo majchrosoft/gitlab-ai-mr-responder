@@ -265,9 +265,14 @@ The test command can use:
 
 ```text
 {project_dir}
+{project_name}
 {mr_dir}
 {mr_iid}
+{base_path}
 ```
+
+`{project_name}` is the last directory name of `{project_dir}`.
+`{base_path}` is the base path of this application.
 
 Example:
 
