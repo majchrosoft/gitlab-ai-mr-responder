@@ -250,6 +250,7 @@ OPENCODE_MODEL=ollama/your-model
 OPENCODE_AUTO_APPROVE=true
 
 TEST_COMMAND="your test command"
+TEST_COMMAND_AFTER_RUN="your cleanup command run after tests"
 
 AI_MAX_AUTO_ITERATIONS_PER_DISCUSSION=1
 AI_MAX_TOTAL_ITERATIONS_PER_DISCUSSION=10
@@ -261,7 +262,8 @@ DRY_RUN=false
 
 ### Test command placeholders
 
-The test command can use:
+The test command (and the optional `TEST_COMMAND_AFTER_RUN` cleanup
+command) can use:
 
 ```text
 {project_dir}

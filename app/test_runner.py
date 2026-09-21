@@ -19,9 +19,11 @@ class TestRunner:
         self,
         command: str,
         base_path: Path,
+        after_run_command: str | None = None,
     ) -> None:
         self.command = command
         self.base_path = base_path
+        self.after_run_command = after_run_command
 
     def run(
         self,
@@ -124,7 +126,84 @@ class TestRunner:
             print()
             print("      → Tests FAILED")
 
+        self._run_after_run_command(
+            working_directory=working_directory,
+            project_directory=project_directory,
+            merge_request_directory=merge_request_directory,
+            merge_request_iid=merge_request_iid,
+            dry_run=dry_run,
+        )
+
         return result
+
+    def _run_after_run_command(
+        self,
+        working_directory: Path,
+        project_directory: Path,
+        merge_request_directory: Path,
+        merge_request_iid: int,
+        dry_run: bool,
+    ) -> None:
+        if not self.after_run_command:
+            return
+
+        command = self._build_command(
+            project_directory=project_directory,
+            merge_request_directory=merge_request_directory,
+            merge_request_iid=merge_request_iid,
+            base_path=self.base_path,
+            command=self.after_run_command,
+        )
+
+        if dry_run:
+            print()
+            print("DRY RUN - After-run command would be executed")
+            print(command)
+            print()
+            return
+
+        print()
+        print(
+            "      Running after-run command: "
+            f"{command}"
+        )
+
+        try:
+            process = subprocess.run(
+                command,
+                cwd=working_directory,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        except OSError as exc:
+            print(
+                "      → After-run command failed "
+                f"to start: {exc}"
+            )
+            return
+
+        if process.returncode != 0:
+            print()
+            print(
+                "      → After-run command failed "
+                f"with code {process.returncode}"
+            )
+
+            if process.stdout.strip():
+                print(process.stdout.strip())
+
+            if process.stderr.strip():
+                print(process.stderr.strip())
+
+            return
+
+        print(
+            "      → After-run command completed"
+        )
 
     def _build_command(
         self,
@@ -132,6 +211,7 @@ class TestRunner:
         merge_request_directory: Path,
         merge_request_iid: int,
         base_path: Path,
+        command: str | None = None,
     ) -> str:
         variables = {
             "project_dir": str(project_directory),
@@ -141,7 +221,7 @@ class TestRunner:
             "base_path": str(base_path),
         }
 
-        command = self.command
+        command = command if command is not None else self.command
         for name, value in variables.items():
             command = command.replace("{" + name + "}", value)
 

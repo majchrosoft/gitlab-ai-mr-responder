@@ -82,6 +82,7 @@ class RuntimeConfig:
 @dataclass(frozen=True)
 class TestConfig:
     command: str
+    after_run_command: str | None
 
 
 @dataclass(frozen=True)
@@ -202,6 +203,17 @@ def get_required_env(name: str) -> str:
         raise RuntimeError(
             f"Required environment variable is missing: {name}"
         )
+
+    return value.strip()
+
+
+def get_optional_env(
+    name: str,
+) -> str | None:
+    value = os.getenv(name)
+
+    if value is None or not value.strip():
+        return None
 
     return value.strip()
 
@@ -338,6 +350,9 @@ def load_config() -> Config:
         ),
         test=TestConfig(
             command=get_required_env("TEST_COMMAND"),
+            after_run_command=get_optional_env(
+                "TEST_COMMAND_AFTER_RUN"
+            ),
         ),
     )
 
@@ -818,6 +833,9 @@ def scan_gitlab(
     test_runner = TestRunner(
         command=config.test.command,
         base_path=PROJECT_ROOT,
+        after_run_command=(
+            config.test.after_run_command
+        ),
     )
 
     iteration_guard = IterationGuard(
