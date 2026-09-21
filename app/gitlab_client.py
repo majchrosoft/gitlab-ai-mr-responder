@@ -179,10 +179,15 @@ class GitLabClient:
                 break
 
             for item in data:
+                title = str(item["title"])
+
+                if title.lower().startswith("draft:"):
+                    continue
+
                 merge_requests.append(
                     MergeRequest(
                         iid=int(item["iid"]),
-                        title=str(item["title"]),
+                        title=title,
                         sha=str(item["sha"]),
                         source_branch=str(
                             item["source_branch"]
