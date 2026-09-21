@@ -135,19 +135,8 @@ class TestRunner:
             "mr_iid": str(merge_request_iid),
         }
 
-        try:
-            return self.command.format(**variables)
-        except KeyError as exc:
-            variable = exc.args[0]
+        command = self.command
+        for name, value in variables.items():
+            command = command.replace("{" + name + "}", value)
 
-            raise RuntimeError(
-                "Unknown TEST_COMMAND variable: "
-                f"{{{variable}}}. "
-                "Available variables: "
-                "{project_dir}, {mr_dir}, {mr_iid}"
-            ) from exc
-        except ValueError as exc:
-            raise RuntimeError(
-                "Invalid TEST_COMMAND format: "
-                f"{exc}"
-            ) from exc
+        return command
