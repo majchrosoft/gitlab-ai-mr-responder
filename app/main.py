@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,30 +114,79 @@ def clear_runtime_data() -> None:
     if not state_file.is_absolute():
         state_file = PROJECT_ROOT / state_file
 
-    paths_to_remove = [
-        repos_dir,
-        logs_dir,
-        state_file,
-    ]
+    preserved_env_files: dict[Path, Path] = {}
+    temp_dir = Path(
+        tempfile.mkdtemp(prefix="gitlab-ai-mr-responder-env-")
+    )
 
-    for path in paths_to_remove:
-        if not path.exists():
-            print(f"  Not present: {path}")
-            continue
+    try:
+        if repos_dir.is_dir():
+            for env_file in sorted(repos_dir.glob("*/.env")):
+                if not env_file.is_file():
+                    continue
 
-        try:
-            if path.is_dir():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
+                project_name = env_file.parent.name
+                backup_path = temp_dir / f"{project_name}.env"
+                shutil.copy2(env_file, backup_path)
 
-            print(f"  Removed: {path}")
-        except Exception as exc:
-            print(f"  FAILED: {path}: {exc}")
-            raise
+                preserved_env_files[
+                    env_file.parent
+                ] = backup_path
 
-    repos_dir.mkdir(parents=True, exist_ok=True)
-    logs_dir.mkdir(parents=True, exist_ok=True)
+                print(
+                    f"  Preserving: {env_file}"
+                )
+
+        paths_to_remove = [
+            repos_dir,
+            logs_dir,
+            state_file,
+        ]
+
+        for path in paths_to_remove:
+            if not path.exists():
+                print(f"  Not present: {path}")
+                continue
+
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+
+                print(f"  Removed: {path}")
+            except Exception as exc:
+                print(f"  FAILED: {path}: {exc}")
+                raise
+
+        repos_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        for project_directory, backup_path in (
+            preserved_env_files.items()
+        ):
+            try:
+                project_directory.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+                shutil.copy2(
+                    backup_path,
+                    project_directory / ".env",
+                )
+
+                print(
+                    "  Restored: "
+                    f"{project_directory / '.env'}"
+                )
+            except Exception as exc:
+                print(
+                    f"  FAILED to restore "
+                    f"{project_directory / '.env'}: {exc}"
+                )
+                raise
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     print()
     print("Clear completed.")
