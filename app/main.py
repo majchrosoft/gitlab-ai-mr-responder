@@ -1245,6 +1245,15 @@ def scan_gitlab(
                             "      → Ignoring discussion"
                         )
 
+                        if not config.runtime.dry_run:
+                            decision_engine.mark_decision_processed(
+                                discussion=discussion,
+                                discussion_state=(
+                                    discussion_state
+                                ),
+                                decision=decision,
+                            )
+
         except GitLabApiError as exc:
             print(
                 f"GitLab API error for "

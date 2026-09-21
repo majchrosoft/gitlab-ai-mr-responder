@@ -89,6 +89,14 @@ class DiscussionDecisionEngine:
                 reason="no_new_notes",
             )
 
+        # A resolved discussion is closed. Never process it again.
+        if latest_note.resolved:
+            return DiscussionDecision(
+                action=DiscussionAction.IGNORE,
+                reason="discussion_resolved",
+                note=latest_note,
+            )
+
         author_type = self.classify_note(latest_note)
 
         if author_type == NoteAuthorType.SYSTEM:
