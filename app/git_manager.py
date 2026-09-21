@@ -258,7 +258,9 @@ class GitManager:
         except OSError as exc:
             raise RuntimeError(
                 "Unable to execute command: "
-                f"{' '.join(command)}"
+                f"{' '.join(command)}\n"
+                f"cwd: {self.repository_path}\n"
+                f"{exc}"
             ) from exc
 
         if check and result.returncode != 0:
