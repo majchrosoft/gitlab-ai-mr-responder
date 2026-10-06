@@ -33,6 +33,7 @@ from opencode_runner import OpenCodeRunner
 from prompts import (
     build_continue_prompt,
     build_fix_prompt,
+    build_review_prompt,
 )
 from repository_manager import RepositoryManager
 from state import DiscussionState, StateStore
@@ -716,6 +717,98 @@ def build_merge_request_description(
     )
 
 
+def format_review_comment(
+    agent_report: str,
+) -> str:
+    return (
+        f"{AI_COMMENT_MARKER}\n\n"
+        "The AI responder performed a read-only "
+        "verification of this comment against the "
+        "codebase. No files were changed.\n\n"
+        "**Verification report**\n\n"
+        f"{agent_report}"
+    )
+
+
+def run_review(
+    config: Config,
+    repository_manager: RepositoryManager,
+    opencode_runner: OpenCodeRunner,
+    project_name: str,
+    project_url: str,
+    merge_request_iid: int,
+    merge_request_title: str,
+    merge_request_sha: str,
+    discussion_id: str,
+    iteration: int,
+    prompt: str,
+) -> AgentOutcome:
+    repository = prepare_repository(
+        repository_manager=repository_manager,
+        project_name=project_name,
+        project_url=project_url,
+        merge_request_iid=merge_request_iid,
+        merge_request_sha=merge_request_sha,
+    )
+
+    git_manager = GitManager(
+        repository_path=repository.path,
+    )
+
+    git_manager.verify_clean_before_agent()
+
+    result = opencode_runner.run(
+        prompt=prompt,
+        working_directory=repository.path,
+        model=config.opencode.model,
+        auto_approve=config.opencode.auto_approve,
+        dry_run=config.runtime.dry_run,
+    )
+
+    if config.runtime.dry_run:
+        return AgentOutcome()
+
+    print()
+    print(
+        "      OpenCode return code: "
+        f"{result.return_code}"
+    )
+
+    if result.stdout.strip():
+        print()
+        print("      OpenCode output:")
+        print(result.stdout.strip())
+
+    if result.stderr.strip():
+        print()
+        print("      OpenCode errors:")
+        print(result.stderr.strip())
+
+    if not result.success:
+        raise RuntimeError(
+            "OpenCode review execution failed with "
+            f"return code {result.return_code}"
+        )
+
+    agent_report = extract_agent_report(result.stdout)
+
+    changes = git_manager.get_changes()
+
+    if changes.has_changes:
+        print()
+        print(
+            "      → Review mode detected working "
+            "tree changes; discarding them (review is "
+            "read-only)"
+        )
+
+        git_manager.discard_changes()
+
+    return AgentOutcome(
+        comment=format_review_comment(agent_report)
+    )
+
+
 def run_agent(
     config: Config,
     client: GitLabClient,
@@ -1239,7 +1332,7 @@ def scan_gitlab(
                             config=config,
                             client=client,
                             project_id=project.id,
-repository_manager=(
+                            repository_manager=(
                                 repository_manager
                             ),
                             opencode_runner=(
@@ -1369,7 +1462,7 @@ repository_manager=(
                             config=config,
                             client=client,
                             project_id=project.id,
-repository_manager=(
+                            repository_manager=(
                                 repository_manager
                             ),
                             opencode_runner=(
@@ -1419,6 +1512,96 @@ repository_manager=(
                                     merge_request_state,
                                     outcome.commit_sha,
                                 )
+
+                            if outcome.comment is not None:
+                                post_explanation_comment(
+                                    client=client,
+                                    config=config,
+                                    state_store=state_store,
+                                    project_id=project.id,
+                                    merge_request_iid=(
+                                        merge_request.iid
+                                    ),
+                                    discussion_state=(
+                                        discussion_state
+                                    ),
+                                    discussion_id=(
+                                        discussion.id
+                                    ),
+                                    comment=outcome.comment,
+                                )
+
+                    elif (
+                        decision.action
+                        == DiscussionAction.REVIEW
+                    ):
+                        if decision.note is None:
+                            print(
+                                "      → REVIEW skipped: "
+                                "no comment"
+                            )
+                            continue
+
+                        iteration = (
+                            discussion_state.iterations
+                            + 1
+                        )
+
+                        print(
+                            "      → Starting read-only "
+                            f"review pass {iteration}"
+                        )
+
+                        task = build_review_prompt(
+                            project_name=project.path,
+                            merge_request_iid=(
+                                merge_request.iid
+                            ),
+                            merge_request_title=(
+                                merge_request.title
+                            ),
+                            merge_request_sha=(
+                                merge_request.sha
+                            ),
+                            discussion_id=discussion.id,
+                            iteration=iteration,
+                            comment=(
+                                decision.note.body
+                            ),
+                        )
+
+                        outcome = run_review(
+                            config=config,
+                            repository_manager=(
+                                repository_manager
+                            ),
+                            opencode_runner=(
+                                opencode_runner
+                            ),
+                            project_name=project.path,
+                            project_url=project_url,
+                            merge_request_iid=(
+                                merge_request.iid
+                            ),
+                            merge_request_title=(
+                                merge_request.title
+                            ),
+                            merge_request_sha=(
+                                merge_request.sha
+                            ),
+                            discussion_id=discussion.id,
+                            iteration=iteration,
+                            prompt=task.prompt,
+                        )
+
+                        if not config.runtime.dry_run:
+                            decision_engine.mark_decision_processed(
+                                discussion=discussion,
+                                discussion_state=(
+                                    discussion_state
+                                ),
+                                decision=decision,
+                            )
 
                             if outcome.comment is not None:
                                 post_explanation_comment(

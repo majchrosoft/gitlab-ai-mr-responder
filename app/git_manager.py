@@ -292,6 +292,23 @@ class GitManager:
 
         return result.stdout
 
+    def discard_changes(self) -> None:
+        self._run(
+            [
+                "git",
+                "reset",
+                "--hard",
+            ]
+        )
+
+        self._run(
+            [
+                "git",
+                "clean",
+                "-fd",
+            ]
+        )
+
     def _run(
         self,
         command: list[str],

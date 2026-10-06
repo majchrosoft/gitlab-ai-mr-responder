@@ -17,6 +17,7 @@ AI_COMMENT_MARKER = f"<!-- {AI_NAMESPACE}:v1 -->"
 AI_REVIEWER_MARKER = "<!-- klickcheck-reviewer:"
 AI_CONTINUE_COMMAND = "AI-CONTINUE"
 AI_APPROVED_KEYWORD = "AI_APPROVED"
+AI_REVIEW_KEYWORD = "AI_REVIEW"
 
 
 class DiscussionAction(str, Enum):
@@ -25,6 +26,7 @@ class DiscussionAction(str, Enum):
     FIX = "fix"
     CONTINUE = "continue"
     BLOCKED = "blocked"
+    REVIEW = "review"
 
 
 class NoteAuthorType(str, Enum):
@@ -90,15 +92,6 @@ class DiscussionDecisionEngine:
                 reason="no_new_notes",
             )
 
-        # Never make automated changes unless the comment
-        # explicitly contains the AI_APPROVED keyword.
-        if not self._is_ai_approved(latest_note.body):
-            return DiscussionDecision(
-                action=DiscussionAction.WAIT,
-                reason="missing_ai_approved_keyword",
-                note=latest_note,
-            )
-
         # A resolved discussion is closed. Never process it again.
         if latest_note.resolved:
             return DiscussionDecision(
@@ -122,6 +115,25 @@ class DiscussionDecisionEngine:
             return DiscussionDecision(
                 action=DiscussionAction.WAIT,
                 reason="waiting_for_human_response_to_ai_comment",
+                note=latest_note,
+            )
+
+        # AI_REVIEW triggers a read-only analysis pass against the
+        # codebase. It never changes the codebase and does NOT
+        # require the AI_APPROVED keyword.
+        if self._is_ai_review(latest_note.body):
+            return DiscussionDecision(
+                action=DiscussionAction.REVIEW,
+                reason="ai_review_command",
+                note=latest_note,
+            )
+
+        # Never make automated changes unless the comment
+        # explicitly contains the AI_APPROVED keyword.
+        if not self._is_ai_approved(latest_note.body):
+            return DiscussionDecision(
+                action=DiscussionAction.WAIT,
+                reason="missing_ai_approved_keyword",
                 note=latest_note,
             )
 
@@ -365,6 +377,12 @@ class DiscussionDecisionEngine:
         body: str,
     ) -> bool:
         return AI_APPROVED_KEYWORD in body
+
+    @staticmethod
+    def _is_ai_review(
+        body: str,
+    ) -> bool:
+        return AI_REVIEW_KEYWORD in body
 
     @staticmethod
     def _is_ai_continue_command(

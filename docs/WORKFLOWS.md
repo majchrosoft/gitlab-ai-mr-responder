@@ -21,17 +21,25 @@ AI_APPROVED
 - If a new human or reviewer comment does **not** contain `AI_APPROVED`,
   the decision engine returns `WAIT` with reason
   `missing_ai_approved_keyword`, and the AI does nothing.
-- The keyword is required for **both** entry paths:
+- The keyword is required for the **code-changing** entry paths:
 
   | Trigger comment contains | Result |
   |---|---|
-  | `AI_APPROVED` only | `FIX` — automatic iteration |
-  | `AI_APPROVED` and `AI-CONTINUE` | `CONTINUE` — manual iteration |
-  | neither keyword | `WAIT` — nothing happens |
+  | `AI_APPROVED` only | `FIX` — automatic iteration (code change) |
+  | `AI_APPROVED` and `AI-CONTINUE` | `CONTINUE` — manual iteration (code change) |
+  | `AI_REVIEW` | `REVIEW` — read-only verification, never changes code |
+  | none of the above | `WAIT` — nothing happens |
 
 `AI-CONTINUE` on its own no longer triggers anything. A comment must
 contain `AI_APPROVED` for the `AI-CONTINUE` command in the same comment
 to be recognized.
+
+`AI_REVIEW` does **not** require `AI_APPROVED` and never grants write
+permission: it always performs a read-only analysis pass against the
+codebase and posts a verification report back into the discussion.
+When a comment contains both `AI_REVIEW` and `AI_APPROVED`, review
+wins (the safe default); if it turns out a change IS necessary, the
+human posts a new comment with `AI_APPROVED` to authorize a fix.
 
 ### Writing a triggering comment
 
@@ -84,9 +92,15 @@ For each discussion, the engine picks one action per scan cycle:
 |---|---|---|
 | `IGNORE` | `discussion_has_no_notes`, `discussion_resolved`, `system_note` | Nothing is ever done, ever |
 | `WAIT` | `no_new_notes`, `missing_ai_approved_keyword`, `waiting_for_human_response_to_ai_comment`, `waiting_for_ai_continue` | No changes; a new qualifying comment is required |
-| `FIX` | `new_reviewer_comment`, `new_human_review_comment` | Automatic iteration starts (first attempt) |
-| `CONTINUE` | `ai_continue_command` | Manual iteration starts (retry authorized by a human) |
+| `FIX` | `new_reviewer_comment`, `new_human_review_comment` | Automatic iteration starts (first code-change attempt) |
+| `CONTINUE` | `ai_continue_command` | Manual iteration starts (code change authorized by a human) |
+| `REVIEW` | `ai_review_command` | Read-only verification pass; never changes code |
 | `BLOCKED` | `maximum_total_iterations_reached`, `maximum_ai_commits_per_merge_request_reached` | Hard limit reached; a human must take over |
+
+Precedence inside `decide()`: system notes are skipped entirely; a
+resolved discussion is always `IGNORE`; the responder's own comments
+only `WAIT`; then `AI_REVIEW` is checked **before** `AI_APPROVED`, so a
+comment containing both keywords is safely treated as review-only.
 
 A `WAIT` caused by limits is different from a `WAIT` caused by a missing
 keyword: a missing keyword stays `WAIT` (a human can still approve
@@ -204,13 +218,48 @@ Meaning:
    links it in the thread.
 4. Humans review and merge the new MR the normal way.
 
-### 6.2 Rejecting an AI suggestion
+### 6.2 Verifying whether a review comment is even true (`AI_REVIEW`)
+
+Sometimes you get a review comment that claims a defect, but the tests
+are green and you suspect the comment is simply wrong.
+
+Example comment:
+
+```text
+The timestamp regexp for the datetime-in-filename is invalid and the
+test will fail. AI_REVIEW
+```
+
+What happens:
+
+1. The engine returns `REVIEW` (regardless of `AI_APPROVED`).
+2. The agent runs in **read-only analysis mode**: it restates the
+   claim, reverse-engineers the actual code and tests (which regex,
+   which test), checks the claim against the real implementation and
+   the real test result, and produces a structured verdict.
+3. If the agent somehow altered the working tree anyway, the
+   responder hard-resets the checkout — review mode never leaves
+   changes, never commits, never pushes, and creates no MR.
+4. The verification report is posted as a reply to the discussion,
+   including: the claim, how it was verified, an explicit
+   TRUE/FALSE verdict, file/function/regex/test-name evidence, and a
+   recommendation.
+
+Reading the result:
+
+- Verdict **FALSE** (claim mistaken, e.g. the regex is actually valid
+  and the test genuinely passes) → resolve the discussion, no change
+  needed.
+- Verdict **TRUE** (real bug) → you can then authorize a real fix by
+  posting a new comment with `AI_APPROVED` (section 6.1).
+
+### 6.3 Rejecting an AI suggestion
 
 Do nothing. Without `AI_APPROVED` the discussion stays `WAIT`ing forever.
 Optionally resolve the discussion to make the intent explicit. A
 resolved discussion is `IGNORE`d permanently.
 
-### 6.3 Retrying a failed fix
+### 6.4 Retrying a failed fix
 
 1. The responder replied that tests failed (`tests_failed`,
    `retry_pending: true`).
@@ -219,7 +268,7 @@ resolved discussion is `IGNORE`d permanently.
    `AI_APPROVED` + a line `AI-CONTINUE` (plus any extra guidance).
 3. Next scan runs a manual iteration with that guidance.
 
-### 6.4 Steering a retry that went wrong
+### 6.5 Steering a retry that went wrong
 
 Because `CONTINUE` prompts include both the original comment and the
 human's continuation comment, the human can write:
@@ -229,14 +278,14 @@ You changed the wrong module. Only touch app/auth/*. AI_APPROVED
 AI-CONTINUE
 ```
 
-### 6.5 Taking over manually
+### 6.6 Taking over manually
 
 If limits cause `BLOCKED`, or the AI keeps changing the wrong thing, a
 human pushes the real fix to the original source branch and resolves
 the discussion. `IGNORE` on a resolved discussion stops all future
 activity on that thread.
 
-### 6.6 Watching without acting
+### 6.7 Watching without acting
 
 ```dotenv
 DRY_RUN=true

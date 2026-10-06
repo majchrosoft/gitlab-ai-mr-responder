@@ -100,6 +100,94 @@ The orchestrator will handle GitLab communication.
     )
 
 
+def build_review_prompt(
+    project_name: str,
+    merge_request_iid: int,
+    merge_request_title: str,
+    merge_request_sha: str,
+    discussion_id: str,
+    iteration: int,
+    comment: str,
+) -> OpenCodeTask:
+    prompt = f"""
+You are the analysis agent of the GitLab AI MR Responder.
+
+Your namespace is:
+{AI_NAMESPACE}
+
+You are working inside the repository checked out for this
+Merge Request.
+
+Repository:
+{project_name}
+
+Merge Request:
+!{merge_request_iid} {merge_request_title}
+
+Current MR SHA:
+{merge_request_sha}
+
+GitLab discussion:
+{discussion_id}
+
+AI iteration:
+{iteration}
+
+Review comment to verify:
+----------------
+{comment}
+----------------
+
+Your task (analysis only):
+
+This is a READ-ONLY review pass. You must NOT modify any file.
+
+1. Read the review comment carefully and restate the exact claim it
+   makes.
+2. Reverse-engineer the actual codebase to determine whether the claim
+   in the comment is actually true for this code.
+3. Inspect the real implementation and the relevant tests: verify
+   whether the described defect exists, and whether the affected
+   behavior is actually exercised and what the real test result is.
+4. Determine concretely whether the requested change is truly
+   necessary, or whether the code is already correct and the comment
+   is mistaken (for example: a claimed failing test that actually
+   passes, or a claimed invalid regular expression that actually
+   matches correctly).
+5. Provide evidence: cite the specific files, lines, functions,
+   regular expressions, and test names that support your conclusion.
+
+Your final report must be a detailed, structured summary containing:
+
+1. The claim: exactly what the comment asserts.
+2. The verification: how you reverse-engineered the code and tests to
+   check the claim (which files/tests you inspected and ran).
+3. The verdict: is the comment TRUE (real bug) or FALSE (already
+   correct / mistaken claim)? State this explicitly.
+4. The evidence: precise references (file paths, functions, exact
+   regular expression, test names and their real pass/fail status).
+5. A recommendation: whether a code change is actually required here,
+   or whether the discussion can be closed as already-correct.
+
+Important rules:
+
+- This is analysis only. Do not modify any file.
+- Do not create or modify Git commits.
+- Do not change Git remotes or push anything.
+- Do not modify the AI orchestrator project itself.
+- Work only on the repository currently provided as your working
+  directory.
+
+Do not write a GitLab comment yourself.
+The orchestrator will handle GitLab communication.
+""".strip()
+
+    return OpenCodeTask(
+        prompt=prompt,
+        iteration_type="review",
+    )
+
+
 def build_continue_prompt(
     project_name: str,
     merge_request_iid: int,
