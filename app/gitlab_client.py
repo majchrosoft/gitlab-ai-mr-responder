@@ -50,6 +50,16 @@ class Discussion:
     notes: list[DiscussionNote]
 
 
+@dataclass(frozen=True)
+class CreatedMergeRequest:
+    iid: int
+    title: str
+    web_url: str
+    source_branch: str
+    target_branch: str
+    sha: str
+
+
 class GitLabClient:
     def __init__(
         self,
@@ -232,6 +242,46 @@ class GitLabClient:
             return int(data["id"])
 
         return None
+
+    def create_merge_request(
+        self,
+        project_id: int,
+        source_branch: str,
+        target_branch: str,
+        title: str,
+        description: str,
+    ) -> CreatedMergeRequest:
+        data = self._request(
+            "POST",
+            f"/projects/{project_id}/merge_requests",
+            json={
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "title": title,
+                "description": description,
+            },
+        )
+
+        if not isinstance(data, dict):
+            raise GitLabApiError(
+                "GitLab create merge request returned "
+                f"unexpected payload: {data!r}"
+            )
+
+        return CreatedMergeRequest(
+            iid=int(data["iid"]),
+            title=str(data.get("title", title)),
+            web_url=str(data.get("web_url", "")),
+            source_branch=str(
+                data.get("source_branch", source_branch)
+            ),
+            target_branch=str(
+                data.get("target_branch", target_branch)
+            ),
+            sha=str(
+                data.get("diff_refs", {}).get("head_sha", "")
+            ),
+        )
 
     def get_merge_request_discussions(
         self,

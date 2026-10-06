@@ -85,6 +85,11 @@ At the end, report:
 5. Whether those tests/checks passed.
 6. Any remaining concern that should be reviewed by a human.
 
+If you changed the code, the very last line of your report must be:
+BRANCH: <short-descriptive-kebab-case-slug>
+The slug must be as short as possible while still describing
+the change (e.g. BRANCH: fix-null-user-check).
+
 Do not write a GitLab comment yourself.
 The orchestrator will handle GitLab communication.
 """.strip()
@@ -172,6 +177,11 @@ At the end, report:
 4. Which tests/checks you ran.
 5. Whether those tests/checks passed.
 6. Any remaining concern that should be reviewed by a human.
+
+If you changed the code, the very last line of your report must be:
+BRANCH: <short-descriptive-kebab-case-slug>
+The slug must be as short as possible while still describing
+the change (e.g. BRANCH: fix-null-user-check).
 
 Do not write a GitLab comment yourself.
 The orchestrator will handle GitLab communication.

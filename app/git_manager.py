@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,32 @@ class GitPushResult:
     commit_sha: str
     remote: str
     branch: str
+
+
+def validate_branch_name(branch: str) -> str:
+    branch = branch.strip()
+
+    if not branch:
+        raise RuntimeError(
+            "Cannot create branch: branch name is empty."
+        )
+
+    if len(branch) > 80:
+        raise RuntimeError(
+            "Branch name is too long: "
+            f"{branch!r}"
+        )
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9._/-]+",
+        branch,
+    ):
+        raise RuntimeError(
+            "Branch name contains invalid characters: "
+            f"{branch!r}"
+        )
+
+    return branch
 
 
 class GitManager:
@@ -197,11 +224,30 @@ class GitManager:
             message=message,
         )
 
+    def create_branch(
+        self,
+        branch: str,
+    ) -> str:
+        branch = validate_branch_name(branch)
+
+        self._run(
+            [
+                "git",
+                "checkout",
+                "-b",
+                branch,
+            ]
+        )
+
+        return branch
+
     def push_to_branch(
         self,
         branch: str,
     ) -> GitPushResult:
-        if not branch.strip():
+        branch = branch.strip()
+
+        if not branch:
             raise RuntimeError(
                 "Cannot push: branch name is empty."
             )
@@ -210,17 +256,23 @@ class GitManager:
 
         print()
         print(
-            "      Force pushing commit "
+            "      Pushing commit "
             f"{commit_sha}"
+        )
+
+        print(
+            "      To new branch: "
+            f"origin/{branch}"
         )
 
         self._run(
             [
                 "git",
                 "push",
+                "--set-upstream",
                 "--force",
                 "origin",
-                f"HEAD:{branch}",
+                f"HEAD:refs/heads/{branch}",
             ]
         )
 

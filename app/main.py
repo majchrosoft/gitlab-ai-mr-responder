@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -434,6 +435,8 @@ def prepare_repository(
 class AgentOutcome:
     commit_sha: str | None = None
     comment: str | None = None
+    merge_request_iid: int | None = None
+    merge_request_url: str | None = None
 
 
 def post_explanation_comment(
@@ -612,6 +615,9 @@ def format_fix_comment(
     changed_files: list[str],
     commit_sha: str,
     review_comment: str,
+    merge_request_web_url: str,
+    merge_request_iid: int,
+    new_branch: str,
 ) -> str:
     changed_files_text = "\n".join(
         f"- {changed_file}"
@@ -622,7 +628,13 @@ def format_fix_comment(
         f"{AI_COMMENT_MARKER}\n\n"
         "**What was improved**\n\n"
         "This discussion was addressed with a code "
-        "change, pushed and tests passed.\n\n"
+        "change. The change was pushed to a new branch "
+        "and a new merge request was opened against the "
+        "original source branch (it was never committed "
+        "directly to the source branch).\n\n"
+        f"New merge request: !{merge_request_iid}\n"
+        f"{merge_request_web_url}\n\n"
+        f"New branch: `{new_branch}`\n\n"
         "Addressed review comment:\n"
         f"> {review_comment.strip()}\n\n"
         "**How**\n\n"
@@ -634,8 +646,80 @@ def format_fix_comment(
     )
 
 
+def sanitize_branch_slug(raw: str) -> str:
+    slug = raw.strip().lower()
+
+    slug = slug.replace("/", "-")
+
+    slug = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        slug,
+    )
+
+    slug = slug.strip("-")
+
+    if not slug:
+        raise RuntimeError(
+            "Agent did not provide a valid branch slug."
+        )
+
+    return slug[:60]
+
+
+def extract_branch_slug(agent_report: str) -> str:
+    slug: str | None = None
+
+    for line in reversed(
+        agent_report.splitlines()
+    ):
+        stripped = line.strip()
+
+        upper = stripped.upper()
+
+        if upper.startswith("BRANCH:"):
+            slug = stripped[len("BRANCH:"):].strip()
+            break
+
+    if slug is None:
+        raise RuntimeError(
+            "Agent report did not contain a "
+            "'BRANCH: <slug>' line."
+        )
+
+    return sanitize_branch_slug(slug)
+
+
+def build_merge_request_description(
+    original_iid: int,
+    original_title: str,
+    review_comment: str,
+    agent_report: str,
+    changed_files: list[str],
+) -> str:
+    changed_files_text = "\n".join(
+        f"- {changed_file}"
+        for changed_file in changed_files
+    )
+
+    return (
+        "## Problem\n\n"
+        f"Addressing a review comment from merge "
+        f"request !{original_iid} "
+        f"({original_title}).\n\n"
+        f"> {review_comment.strip()}\n\n"
+        "## Solution\n\n"
+        "The AI responder made the following change:\n\n"
+        f"{agent_report}\n\n"
+        "## Changed files\n\n"
+        f"{changed_files_text}"
+    )
+
+
 def run_agent(
     config: Config,
+    client: GitLabClient,
+    project_id: int,
     repository_manager: RepositoryManager,
     opencode_runner: OpenCodeRunner,
     test_runner: TestRunner,
@@ -774,8 +858,19 @@ def run_agent(
         "      → Tests PASSED"
     )
 
+    try:
+        new_branch = extract_branch_slug(agent_report)
+    except RuntimeError as exc:
+        return AgentOutcome(
+            comment=format_no_change_comment(
+                f"Could not determine a branch name for "
+                f"the change: {exc}\n\n{agent_report}"
+            )
+        )
+
     commit_message = (
-        f"fix: address MR !{merge_request_iid} review"
+        f"fix: {new_branch} "
+        f"(MR !{merge_request_iid})"
     )
 
     print()
@@ -794,6 +889,16 @@ def run_agent(
         f"{commit_result.commit_sha}"
     )
 
+    print()
+    print(
+        "      Creating new branch from source: "
+        f"{new_branch}"
+    )
+
+    git_manager.create_branch(
+        branch=new_branch,
+    )
+
     test_runner.run_after_run_command(
         working_directory=repository.path,
         project_directory=repository.path.parent,
@@ -804,18 +909,49 @@ def run_agent(
 
     print()
     print(
-        "      Pushing to branch: "
-        f"{source_branch}"
+        "      Pushing to new branch: "
+        f"origin/{new_branch}"
     )
 
     push_result = git_manager.push_to_branch(
-        branch=source_branch,
+        branch=new_branch,
     )
 
     print()
     print(
         "      Push completed: "
         f"{push_result.commit_sha}"
+    )
+
+    print()
+    print(
+        "      Creating merge request into "
+        f"{source_branch}"
+    )
+
+    created_merge_request = (
+        client.create_merge_request(
+            project_id=project_id,
+            source_branch=new_branch,
+            target_branch=source_branch,
+            title=f"fix: {new_branch}",
+            description=(
+                build_merge_request_description(
+                    original_iid=merge_request_iid,
+                    original_title=merge_request_title,
+                    review_comment=review_comment,
+                    agent_report=agent_report,
+                    changed_files=changes.changed_files,
+                )
+            ),
+        )
+    )
+
+    print()
+    print(
+        "      Merge request created: "
+        f"!{created_merge_request.iid} "
+        f"{created_merge_request.web_url}"
     )
 
     return AgentOutcome(
@@ -825,6 +961,19 @@ def run_agent(
             changed_files=changes.changed_files,
             commit_sha=push_result.commit_sha,
             review_comment=review_comment,
+            merge_request_web_url=(
+                created_merge_request.web_url
+            ),
+            merge_request_iid=(
+                created_merge_request.iid
+            ),
+            new_branch=new_branch,
+        ),
+        merge_request_iid=(
+            created_merge_request.iid
+        ),
+        merge_request_url=(
+            created_merge_request.web_url
         ),
     )
 
@@ -1088,7 +1237,9 @@ def scan_gitlab(
 
                         outcome = run_agent(
                             config=config,
-                            repository_manager=(
+                            client=client,
+                            project_id=project.id,
+repository_manager=(
                                 repository_manager
                             ),
                             opencode_runner=(
@@ -1216,7 +1367,9 @@ def scan_gitlab(
 
                         outcome = run_agent(
                             config=config,
-                            repository_manager=(
+                            client=client,
+                            project_id=project.id,
+repository_manager=(
                                 repository_manager
                             ),
                             opencode_runner=(

@@ -16,6 +16,7 @@ AI_NAMESPACE = "gitlab-ai-mr-responder"
 AI_COMMENT_MARKER = f"<!-- {AI_NAMESPACE}:v1 -->"
 AI_REVIEWER_MARKER = "<!-- klickcheck-reviewer:"
 AI_CONTINUE_COMMAND = "AI-CONTINUE"
+AI_APPROVED_KEYWORD = "AI_APPROVED"
 
 
 class DiscussionAction(str, Enum):
@@ -87,6 +88,15 @@ class DiscussionDecisionEngine:
             return DiscussionDecision(
                 action=DiscussionAction.WAIT,
                 reason="no_new_notes",
+            )
+
+        # Never make automated changes unless the comment
+        # explicitly contains the AI_APPROVED keyword.
+        if not self._is_ai_approved(latest_note.body):
+            return DiscussionDecision(
+                action=DiscussionAction.WAIT,
+                reason="missing_ai_approved_keyword",
+                note=latest_note,
             )
 
         # A resolved discussion is closed. Never process it again.
@@ -272,6 +282,9 @@ class DiscussionDecisionEngine:
             if self._is_ai_responder_comment(note):
                 continue
 
+            if not self._is_ai_approved(note.body):
+                continue
+
             if self._is_ai_continue_command(note.body):
                 if self.state_store.is_continue_note_processed(
                     discussion_state,
@@ -346,6 +359,12 @@ class DiscussionDecisionEngine:
         note: DiscussionNote,
     ) -> bool:
         return AI_REVIEWER_MARKER in note.body
+
+    @staticmethod
+    def _is_ai_approved(
+        body: str,
+    ) -> bool:
+        return AI_APPROVED_KEYWORD in body
 
     @staticmethod
     def _is_ai_continue_command(
