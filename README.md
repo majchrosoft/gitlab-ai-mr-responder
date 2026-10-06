@@ -4,7 +4,19 @@ AI-powered automation for reviewing and fixing GitLab Merge Request discussions 
 
 GitLab AI MR Responder connects GitLab Merge Requests with an AI coding agent, local LLM infrastructure, automated tests, and a controlled Git workflow.
 
-> Read actionable review feedback, let an AI coding agent implement the fix, run the project's tests, and push the resulting commit back to the Merge Request — while keeping Git history and remote writes under the responder's control.
+> Read actionable review feedback (only when a comment contains `AI_APPROVED`), let an AI coding agent implement the fix, run the project's tests, push the result to a new descriptive branch, and open a new merge request into the original source branch — while keeping Git history and remote writes under the responder's control.
+
+## Automated change trigger
+
+No automated change ever happens unless a discussion comment contains the keyword:
+
+```text
+AI_APPROVED
+```
+
+Without it, the discussion stays in `WAIT` and the AI does nothing. To authorize another manual attempt after a failed or partial fix, a human posts `AI_APPROVED` together with a line containing `AI-CONTINUE`. Full decision table and recipes: [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+
+> **The responder never changes code unless a comment contains the keyword `AI_APPROVED`.** See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) for the full workflow and management documentation.
 
 ## Why this project exists
 
@@ -15,34 +27,37 @@ GitLab MR / discussion
         |
         v
  Decision engine
+ (requires AI_APPROVED)
         |
    +----+----+
    |         |
  IGNORE     FIX / CONTINUE
-             |
-             v
-      Prepare exact MR SHA
-             |
-             v
-        Coding agent
-             |
-             v
-        Detect changes
-             |
-             v
-          Run tests
-          /       \
-       PASS       FAIL
-        |           |
-        v           v
-      Commit     Retry / wait
-        |
-        v
-      Push branch
-        |
-        v
-       GitLab
+  (WAIT)        |
+                v
+         Prepare exact MR SHA
+                |
+                v
+           Coding agent
+                |
+                v
+           Detect changes
+                |
+                v
+             Run tests
+             /       \
+          PASS       FAIL
+           |           |
+           v           v
+   New branch +    Retry / wait
+   push branch
+           |
+           v
+   New MR -> source branch
+           |
+           v
+          GitLab
 ```
+
 
 ## Features
 
@@ -92,7 +107,7 @@ This enables a workflow where repository source code can remain on infrastructur
 After the coding agent changes the repository:
 
 ```text
-AI changes -> test command -> PASS -> commit -> push
+AI changes -> test command -> PASS -> commit -> new branch -> push -> new MR
                          \-> FAIL -> record/retry
 ```
 
@@ -174,7 +189,8 @@ Runtime state can include:
      v
 +-----------------------+
 |       GitLab          |
-| source branch push    |
+| new branch push +     |
+| new MR -> source br.  |
 +-----------------------+
 ```
 
@@ -190,13 +206,13 @@ AI agent:
 
 AI agent should NOT:
   create the final Git commit
-  push the source branch
+  push to any branch
 
 Responder:
   validate repository state
   create the commit
-  verify the remote branch
-  perform the push
+  create and force-push the new branch
+  open the merge request into the source branch
 ```
 
 For production use, consider a dedicated Unix account, least-privilege GitLab credentials, isolated repository workspaces, restricted Docker access, external secret storage, and conservative iteration/commit limits.
@@ -299,6 +315,7 @@ Scanning GitLab...
 Merge Request !123
     Discussion abc123
     Action: FIX
+    Body: guard user with null check AI_APPROVED
 
     Preparing repository...
     Running OpenCode...
@@ -311,9 +328,17 @@ Merge Request !123
     Creating commit...
     Commit created: abc123...
 
-    Pushing to branch...
+    Creating new branch from source: fix-null-user-check
+    Pushing to new branch: origin/fix-null-user-check
     Push completed.
+
+    Creating merge request into feature/user-login
+    Merge request created: !128 https://gitlab.example.com/group/project/-/merge_requests/128
 ```
+
+(The original discussion is then answered with a reply comment linking
+the new merge request.)
+
 
 ## Dry run
 
@@ -421,7 +446,10 @@ git branch --show-current
 git log --oneline -5
 ```
 
-Verify that the configured credentials can update the MR source branch.
+Verify that the configured credentials can read the repository and
+create branches and merge requests. The AI responder never commits
+directly to the MR source branch; it pushes a new branch and opens a
+merge request targeting it.
 
 ## Development
 
