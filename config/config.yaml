@@ -10,7 +10,6 @@ opencode:
   command: "opencode"
 
 limits:
-  max_auto_iterations_per_discussion: 2
   max_total_iterations_per_discussion: 10
   max_ai_commits_per_merge_request: 5
 

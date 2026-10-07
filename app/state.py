@@ -12,8 +12,6 @@ class DiscussionState:
     discussion_id: str
 
     iterations: int = 0
-    automatic_iterations: int = 0
-    manual_iterations: int = 0
 
     processed_note_ids: list[int] = field(default_factory=list)
     processed_comment_fingerprints: list[str] = field(
@@ -220,7 +218,6 @@ class StateStore:
         sha: str,
     ) -> None:
         discussion.iterations += 1
-        discussion.automatic_iterations += 1
         discussion.last_processed_sha = sha
         discussion.status = "processing"
         discussion.retry_pending = False
@@ -231,7 +228,6 @@ class StateStore:
         sha: str,
     ) -> None:
         discussion.iterations += 1
-        discussion.manual_iterations += 1
         discussion.last_processed_sha = sha
         discussion.status = "processing"
         discussion.retry_pending = False
@@ -388,21 +384,6 @@ class StateStore:
                         discussion_raw.get(
                             "iterations",
                             0,
-                        )
-                    ),
-                    automatic_iterations=int(
-                        discussion_raw.get(
-                            "automatic_iterations",
-                            0,
-                        )
-                    ),
-                    manual_iterations=int(
-                        discussion_raw.get(
-                            "manual_iterations",
-                            discussion_raw.get(
-                                "manual_continuations",
-                                0,
-                            ),
                         )
                     ),
                     processed_note_ids=[

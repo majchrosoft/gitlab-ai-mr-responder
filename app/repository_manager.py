@@ -16,6 +16,7 @@ class Repository:
 
 class RepositoryManager:
     WWW_DATA_USER = "www-data"
+    ACL_EXCLUDED_PREFIXES = ("oauth",)
 
     def __init__(
         self,
@@ -173,12 +174,12 @@ class RepositoryManager:
         )
 
         if not self._command_exists("setfacl"):
-            raise RuntimeError(
-                "Unable to grant www-data access to repository: "
-                f"{repository_path}\n"
-                "The 'setfacl' command is required but was not found. "
+            print(
+                "      Skipping www-data access: "
+                "the 'setfacl' command was not found. "
                 "Install it with: sudo apt install acl"
             )
+            return
 
         self._set_acl(
             repository_path
@@ -188,35 +189,60 @@ class RepositoryManager:
         self,
         repository_path: Path,
     ) -> None:
-        try:
-            self._run(
-                [
-                    "setfacl",
-                    "-R",
-                    "-m",
-                    f"u:{self.WWW_DATA_USER}:rwx",
-                    str(repository_path),
-                ],
-                cwd=repository_path.parent,
+        for path in self._walk_repository(
+            repository_path
+        ):
+            if self._is_acl_excluded(path):
+                continue
+
+            if path.is_dir():
+                self._try_set_acl(
+                    path,
+                    default=True,
+                )
+            self._try_set_acl(
+                path,
+                default=False,
             )
 
+    def _is_acl_excluded(
+        self,
+        path: Path,
+    ) -> bool:
+        return path.name.startswith(
+            self.ACL_EXCLUDED_PREFIXES
+        )
+
+    def _try_set_acl(
+        self,
+        path: Path,
+        default: bool,
+    ) -> None:
+        command = [
+            "setfacl",
+        ]
+
+        if default:
+            command.append("-d")
+
+        command.extend(
+            [
+                "-m",
+                f"u:{self.WWW_DATA_USER}:rwx",
+                str(path),
+            ]
+        )
+
+        try:
             self._run(
-                [
-                    "setfacl",
-                    "-R",
-                    "-d",
-                    "-m",
-                    f"u:{self.WWW_DATA_USER}:rwx",
-                    str(repository_path),
-                ],
-                cwd=repository_path.parent,
+                command,
+                cwd=path.parent,
             )
         except RuntimeError as exc:
-            raise RuntimeError(
-                "Unable to grant www-data access "
-                f"to repository: {repository_path}\n"
-                f"{exc}"
-            ) from exc
+            print(
+                "      Ignoring ACL failure "
+                f"for {path}: {exc}"
+            )
 
     def _walk_repository(
         self,

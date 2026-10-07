@@ -17,11 +17,9 @@ class IterationDecision:
 class IterationGuard:
     def __init__(
         self,
-        max_auto_iterations: int,
         max_total_iterations: int,
         max_ai_commits_per_merge_request: int,
     ) -> None:
-        self.max_auto_iterations = max_auto_iterations
         self.max_total_iterations = max_total_iterations
         self.max_ai_commits_per_merge_request = (
             max_ai_commits_per_merge_request
@@ -38,18 +36,9 @@ class IterationGuard:
                 reason="maximum_total_iterations_reached",
             )
 
-        if (
-            discussion.automatic_iterations
-            < self.max_auto_iterations
-        ):
-            return IterationDecision(
-                allowed=True,
-                reason="automatic_iteration_available",
-            )
-
         return IterationDecision(
-            allowed=False,
-            reason="waiting_for_ai_continue",
+            allowed=True,
+            reason="automatic_iteration_available",
         )
 
     def can_start_manual_iteration(

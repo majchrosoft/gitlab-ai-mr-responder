@@ -66,7 +66,6 @@ class OpenCodeConfig:
 
 @dataclass(frozen=True)
 class LimitsConfig:
-    max_auto_iterations_per_discussion: int
     max_total_iterations_per_discussion: int
     max_commits_per_merge_request: int
 
@@ -328,10 +327,6 @@ def load_config() -> Config:
             ),
         ),
         limits=LimitsConfig(
-            max_auto_iterations_per_discussion=get_int_env(
-                "AI_MAX_AUTO_ITERATIONS_PER_DISCUSSION",
-                1,
-            ),
             max_total_iterations_per_discussion=get_int_env(
                 "AI_MAX_TOTAL_ITERATIONS_PER_DISCUSSION",
                 10,
@@ -387,10 +382,6 @@ def print_config(config: Config) -> None:
     print(
         f"  Test command: "
         f"{config.test.command}"
-    )
-    print(
-        "  Max automatic iterations/discussion: "
-        f"{config.limits.max_auto_iterations_per_discussion}"
     )
     print(
         "  Max total iterations/discussion: "
@@ -484,29 +475,70 @@ def post_explanation_comment(
     )
 
 
-def extract_agent_report(stdout: str) -> str:
+def _parse_message_events(stdout: str) -> list[dict]:
+    stdout = stdout.strip()
+
+    if not stdout:
+        return []
+
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError:
-        return stdout.strip()
+        events: list[dict] = []
 
-    messages = data if isinstance(data, list) else [data]
+        for line in stdout.splitlines():
+            line = line.strip()
+
+            if not line:
+                continue
+
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(parsed, dict):
+                events.append(parsed)
+            elif isinstance(parsed, list):
+                events.extend(
+                    item
+                    for item in parsed
+                    if isinstance(item, dict)
+                )
+
+        return events
+    else:
+        if isinstance(data, list):
+            return [
+                item
+                for item in data
+                if isinstance(item, dict)
+            ]
+
+        if isinstance(data, dict):
+            return [data]
+
+        return []
+
+
+def extract_agent_report(stdout: str) -> str:
+    events = _parse_message_events(stdout)
 
     texts: list[str] = []
 
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
+    for event in events:
+        raw_parts = event.get("parts")
 
-        if message.get("type") not in {None, "text"}:
-            continue
+        if not isinstance(raw_parts, list):
+            part = event.get("part")
 
-        parts = message.get("parts")
+            raw_parts = (
+                [part]
+                if isinstance(part, dict)
+                else []
+            )
 
-        if not isinstance(parts, list):
-            continue
-
-        for part in parts:
+        for part in raw_parts:
             if (
                 isinstance(part, dict)
                 and part.get("type") == "text"
@@ -647,7 +679,7 @@ def format_fix_comment(
     )
 
 
-def sanitize_branch_slug(raw: str) -> str:
+def sanitize_branch_slug(raw: str) -> str | None:
     slug = raw.strip().lower()
 
     slug = slug.replace("/", "-")
@@ -661,14 +693,12 @@ def sanitize_branch_slug(raw: str) -> str:
     slug = slug.strip("-")
 
     if not slug:
-        raise RuntimeError(
-            "Agent did not provide a valid branch slug."
-        )
+        return None
 
     return slug[:60]
 
 
-def extract_branch_slug(agent_report: str) -> str:
+def extract_branch_slug(agent_report: str) -> str | None:
     slug: str | None = None
 
     for line in reversed(
@@ -683,10 +713,7 @@ def extract_branch_slug(agent_report: str) -> str:
             break
 
     if slug is None:
-        raise RuntimeError(
-            "Agent report did not contain a "
-            "'BRANCH: <slug>' line."
-        )
+        return None
 
     return sanitize_branch_slug(slug)
 
@@ -714,6 +741,39 @@ def build_merge_request_description(
         f"{agent_report}\n\n"
         "## Changed files\n\n"
         f"{changed_files_text}"
+    )
+
+
+def format_blocked_comment(
+    reason: str,
+) -> str:
+    return (
+        f"{AI_COMMENT_MARKER}\n\n"
+        "The AI responder stopped working on this "
+        "discussion because an iteration limit was "
+        f"reached: {reason}.\n\n"
+        "No further automatic analysis or fix will be "
+        "attempted. All information gathered so far was "
+        "already reported in the previous replies, "
+        "including all possible causes of the reported "
+        "issue. A human must now take over or explicitly "
+        "raise the limits."
+    )
+
+
+def format_missing_keyword_comment(
+) -> str:
+    return (
+        f"{AI_COMMENT_MARKER}\n\n"
+        "The AI responder did not act on this comment "
+        "because it does not contain the keyword "
+        "AI_APPROVED.\n\n"
+        "No analysis or fix was performed yet. To "
+        "authorize an automatic fix, post a new comment "
+        "containing AI_APPROVED. To request a read-only "
+        "verification that enumerates every possible "
+        "cause of the reported issue, post a comment "
+        "containing AI_REVIEW."
     )
 
 
@@ -951,15 +1011,12 @@ def run_agent(
         "      → Tests PASSED"
     )
 
-    try:
-        new_branch = extract_branch_slug(agent_report)
-    except RuntimeError as exc:
-        return AgentOutcome(
-            comment=format_no_change_comment(
-                f"Could not determine a branch name for "
-                f"the change: {exc}\n\n{agent_report}"
-            )
-        )
+    agent_slug = extract_branch_slug(agent_report)
+
+    if agent_slug is None:
+        new_branch = f"{source_branch}-AI_CHANGE"
+    else:
+        new_branch = agent_slug
 
     commit_message = (
         f"fix: {new_branch} "
@@ -1098,10 +1155,6 @@ def scan_gitlab(
     )
 
     iteration_guard = IterationGuard(
-        max_auto_iterations=(
-            config.limits
-            .max_auto_iterations_per_discussion
-        ),
         max_total_iterations=(
             config.limits
             .max_total_iterations_per_discussion
@@ -1219,12 +1272,7 @@ def scan_gitlab(
 
                     print(
                         "      Iterations: "
-                        f"{discussion_state.iterations} "
-                        f"(auto="
-                        f"{discussion_state.automatic_iterations}"
-                        f", manual="
-                        f"{discussion_state.manual_iterations}"
-                        f")"
+                        f"{discussion_state.iterations}"
                     )
 
                     print(
@@ -1630,6 +1678,43 @@ def scan_gitlab(
                             "human input"
                         )
 
+                        if (
+                            decision.reason
+                            == "missing_ai_approved_keyword"
+                        ):
+                            print(
+                                "      → Posting summary "
+                                "reply: keyword missing"
+                            )
+
+                            if not config.runtime.dry_run:
+                                decision_engine.mark_decision_processed(
+                                    discussion=discussion,
+                                    discussion_state=(
+                                        discussion_state
+                                    ),
+                                    decision=decision,
+                                )
+
+                                post_explanation_comment(
+                                    client=client,
+                                    config=config,
+                                    state_store=state_store,
+                                    project_id=project.id,
+                                    merge_request_iid=(
+                                        merge_request.iid
+                                    ),
+                                    discussion_state=(
+                                        discussion_state
+                                    ),
+                                    discussion_id=(
+                                        discussion.id
+                                    ),
+                                    comment=(
+                                        format_missing_keyword_comment()
+                                    ),
+                                )
+
                     elif (
                         decision.action
                         == DiscussionAction.BLOCKED
@@ -1638,6 +1723,36 @@ def scan_gitlab(
                             "      → Discussion is blocked "
                             "by iteration limits"
                         )
+
+                        if not config.runtime.dry_run:
+                            decision_engine.mark_decision_processed(
+                                discussion=discussion,
+                                discussion_state=(
+                                    discussion_state
+                                ),
+                                decision=decision,
+                            )
+
+                            post_explanation_comment(
+                                client=client,
+                                config=config,
+                                state_store=state_store,
+                                project_id=project.id,
+                                merge_request_iid=(
+                                    merge_request.iid
+                                ),
+                                discussion_state=(
+                                    discussion_state
+                                ),
+                                discussion_id=(
+                                    discussion.id
+                                ),
+                                comment=(
+                                    format_blocked_comment(
+                                        decision.reason
+                                    )
+                                ),
+                            )
 
                     elif (
                         decision.action

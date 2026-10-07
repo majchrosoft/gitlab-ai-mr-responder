@@ -91,7 +91,7 @@ For each discussion, the engine picks one action per scan cycle:
 | Action | Reason examples | Meaning |
 |---|---|---|
 | `IGNORE` | `discussion_has_no_notes`, `discussion_resolved`, `system_note` | Nothing is ever done, ever |
-| `WAIT` | `no_new_notes`, `missing_ai_approved_keyword`, `waiting_for_human_response_to_ai_comment`, `waiting_for_ai_continue` | No changes; a new qualifying comment is required |
+| `WAIT` | `no_new_notes`, `missing_ai_approved_keyword`, `waiting_for_human_response_to_ai_comment` | No changes; a new qualifying comment is required |
 | `FIX` | `new_reviewer_comment`, `new_human_review_comment` | Automatic iteration starts (first code-change attempt) |
 | `CONTINUE` | `ai_continue_command` | Manual iteration starts (code change authorized by a human) |
 | `REVIEW` | `ai_review_command` | Read-only verification pass; never changes code |
@@ -184,20 +184,18 @@ explaining that and pushes nothing.
 
 ## 5. Iteration model and limits
 
-Two counters per discussion, one per merge request:
+One counter per discussion, one per merge request:
 
 | Counter | Limit env var | Default | Behaviour when exhausted |
 |---|---|---|---|
-| `automatic_iterations` | `AI_MAX_AUTO_ITERATIONS_PER_DISCUSSION` | 1 | Further comments only `WAIT` (`waiting_for_ai_continue`) — human must post `AI_APPROVED` + `AI-CONTINUE` |
 | `iterations` (total) | `AI_MAX_TOTAL_ITERATIONS_PER_DISCUSSION` | 10 | Discussion becomes `BLOCKED` |
 | `ai_commits` per MR | `AI_MAX_COMMITS_PER_MERGE_REQUEST` | 5 | Manual `CONTINUE` becomes `BLOCKED` |
 
 Meaning:
 
-- By default the AI makes **one automatic attempt** per discussion.
-  After that, every further attempt requires a human who explicitly
-  authorizes it by posting `AI_APPROVED` followed by an `AI-CONTINUE`
-  line.
+- Every automated change only starts once a comment explicitly contains
+  the `AI_APPROVED` keyword; there is no separate automatic-iteration
+  budget anymore.
 - `CONTINUE` also checks the per-MR AI commit budget; `FIX` does not
   (the MR-wide commit budget mainly throttles manual retries).
 - Every processed note (and every system note) is stored by ID in the
@@ -312,8 +310,6 @@ repository, never pushes, and never creates MRs.
         "<discussion_id>": {
           "discussion_id": "...",
           "iterations": 1,
-          "automatic_iterations": 1,
-          "manual_iterations": 0,
           "processed_note_ids": [42],
           "processed_continue_note_ids": [47],
           "last_processed_sha": "abc123...",
@@ -346,7 +342,10 @@ Each MR is a full clone under `repos/<project_path>/<mr_iid>` checked
 out detached at the exact MR head SHA, refreshed (`fetch --all
 --prune`, `reset --hard`, `clean -fd`) on every scan. `.env` files are
 moved into each project checkout before wipes. ACLs for `www-data` are
-applied with `setfacl` when present.
+applied with `setfacl` when present, except for files whose name starts
+with `oauth` (e.g. `storage/oauth-private.key`), whose permissions must
+stay untouched (league/oauth2-server rejects key files whose effective
+permissions include group-execute, e.g. `670`).
 
 ### 7.3 Resetting runtime data
 
@@ -420,7 +419,6 @@ reported. Failures are not silently converted into successes.
 | `OPENCODE_AUTO_APPROVE` | pass `--auto` to OpenCode (`true`/`false`) | false |
 | `TEST_COMMAND` | project test command, supports `{project_dir}`, `{project_name}`, `{mr_dir}`, `{mr_iid}`, `{base_path}` | required |
 | `TEST_COMMAND_AFTER_RUN` | optional cleanup command run after a successful fix commit | unset |
-| `AI_MAX_AUTO_ITERATIONS_PER_DISCUSSION` | automatic attempts before `AI-CONTINUE` is required | 1 |
 | `AI_MAX_TOTAL_ITERATIONS_PER_DISCUSSION` | total attempts before the thread is `BLOCKED` | 10 |
 | `AI_MAX_COMMITS_PER_MERGE_REQUEST` | AI commits per MR before `BLOCKED` | 5 |
 | `STATE_FILE` | JSON state path (relative = relative to project root) | `data/state.json` |
@@ -434,7 +432,7 @@ reported. Failures are not silently converted into successes.
 |---|---|
 | Nothing happens after a valid comment | Keyword missing; typo in `AI_APPROVED` (substring match is case-sensitive); or iteration already processed (check note IDs in state) |
 | `Decision: WAIT (missing_ai_approved_keyword)` forever | The comment did not contain the keyword; the AI is behaving correctly |
-| AI replies but won't try again | Automatic budget (`max_auto`) exhausted — post `AI_APPROVED` + `AI-CONTINUE` |
+| AI replies but won't try again | Total iteration limit reached (`BLOCKED`) or comment lacked `AI_APPROVED`; check state |
 | `BLOCKED (maximum_ai_commits_per_merge_request_reached)` | Per‑MR AI commit limit hit; human takes over or raise limit |
 | "Could not determine a branch name" comment | Agent report had no `BRANCH:` line; the change is intentionally not pushed — inspect the report in the reply |
 | Wrong behavior on all discussions | Local `data/state.json`; `python app/main.py clear`, fix config, rerun |

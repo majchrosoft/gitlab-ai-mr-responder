@@ -28,7 +28,6 @@ class OpenCodeConfig:
 
 @dataclass(frozen=True)
 class LimitsConfig:
-    max_auto_iterations_per_discussion: int
     max_total_iterations_per_discussion: int
     max_commits_per_merge_request: int
 
@@ -166,11 +165,6 @@ def load_config() -> Config:
     if not opencode_command:
         opencode_command = "opencode"
 
-    max_auto_iterations = _get_int_env(
-        "AI_MAX_AUTO_ITERATIONS_PER_DISCUSSION",
-        2,
-    )
-
     max_total_iterations = _get_int_env(
         "AI_MAX_TOTAL_ITERATIONS_PER_DISCUSSION",
         10,
@@ -181,22 +175,10 @@ def load_config() -> Config:
         5,
     )
 
-    if max_auto_iterations < 0:
-        raise RuntimeError(
-            "AI_MAX_AUTO_ITERATIONS_PER_DISCUSSION "
-            "cannot be negative."
-        )
-
     if max_total_iterations < 1:
         raise RuntimeError(
             "AI_MAX_TOTAL_ITERATIONS_PER_DISCUSSION "
             "must be at least 1."
-        )
-
-    if max_auto_iterations > max_total_iterations:
-        raise RuntimeError(
-            "AI_MAX_AUTO_ITERATIONS_PER_DISCUSSION cannot be "
-            "greater than AI_MAX_TOTAL_ITERATIONS_PER_DISCUSSION."
         )
 
     if max_commits < 0:
@@ -231,7 +213,6 @@ def load_config() -> Config:
             command=opencode_command,
         ),
         limits=LimitsConfig(
-            max_auto_iterations_per_discussion=max_auto_iterations,
             max_total_iterations_per_discussion=max_total_iterations,
             max_commits_per_merge_request=max_commits,
         ),

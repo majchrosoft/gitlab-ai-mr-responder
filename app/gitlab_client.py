@@ -78,16 +78,16 @@ class GitLabClient:
             }
         )
 
-    def _request(
+    def _request_raw(
         self,
         method: str,
         path: str,
         **kwargs: Any,
-    ) -> Any:
+    ) -> requests.Response:
         url = f"{self.base_url}/api/v4{path}"
 
         try:
-            response = self.session.request(
+            return self.session.request(
                 method=method,
                 url=url,
                 timeout=self.timeout,
@@ -98,6 +98,12 @@ class GitLabClient:
                 f"GitLab request failed: {exc}"
             ) from exc
 
+    @staticmethod
+    def _parse_response(
+        response: requests.Response,
+        method: str,
+        path: str,
+    ) -> Any:
         if response.status_code >= 400:
             body = response.text.strip()
 
@@ -112,8 +118,27 @@ class GitLabClient:
         except ValueError as exc:
             raise GitLabApiError(
                 "GitLab API returned invalid JSON for "
-                f"{method} {path}"
+                f"{method} {path}: "
+                f"{response.text.strip()}"
             ) from exc
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        **kwargs: Any,
+    ) -> Any:
+        response = self._request_raw(
+            method,
+            path,
+            **kwargs,
+        )
+
+        return self._parse_response(
+            response,
+            method,
+            path,
+        )
 
     @staticmethod
     def project_path_from_url(
@@ -251,7 +276,7 @@ class GitLabClient:
         title: str,
         description: str,
     ) -> CreatedMergeRequest:
-        data = self._request(
+        response = self._request_raw(
             "POST",
             f"/projects/{project_id}/merge_requests",
             json={
@@ -262,11 +287,61 @@ class GitLabClient:
             },
         )
 
+        path = f"/projects/{project_id}/merge_requests"
+
+        try:
+            data = self._parse_response(
+                response,
+                "POST",
+                path,
+            )
+        except GitLabApiError as exc:
+            raise GitLabApiError(
+                f"{exc} (response status: "
+                f"{response.status_code})"
+            ) from exc
+
         if not isinstance(data, dict):
             raise GitLabApiError(
                 "GitLab create merge request returned "
-                f"unexpected payload: {data!r}"
+                f"unexpected payload (status "
+                f"{response.status_code}): {data!r}"
             )
+
+        if data.get("iid") is None:
+            raise GitLabApiError(
+                "GitLab create merge request response "
+                "is missing the merge request 'iid' "
+                f"(status {response.status_code}): "
+                f"{response.text.strip()}"
+            )
+
+        try:
+            return self._parse_created_merge_request(
+                data,
+                title=title,
+                source_branch=source_branch,
+                target_branch=target_branch,
+            )
+        except Exception as exc:
+            return self._recover_created_merge_request(
+                exc,
+                project_id=project_id,
+                source_branch=source_branch,
+                target_branch=target_branch,
+            )
+
+    @staticmethod
+    def _parse_created_merge_request(
+        data: dict[str, Any],
+        title: str,
+        source_branch: str,
+        target_branch: str,
+    ) -> CreatedMergeRequest:
+        diff_refs = data.get("diff_refs")
+
+        if not isinstance(diff_refs, dict):
+            diff_refs = {}
 
         return CreatedMergeRequest(
             iid=int(data["iid"]),
@@ -278,9 +353,61 @@ class GitLabClient:
             target_branch=str(
                 data.get("target_branch", target_branch)
             ),
-            sha=str(
-                data.get("diff_refs", {}).get("head_sha", "")
-            ),
+            sha=str(diff_refs.get("head_sha", "")),
+        )
+
+    def _recover_created_merge_request(
+        self,
+        parsing_error: Exception,
+        project_id: int,
+        source_branch: str,
+        target_branch: str,
+    ) -> CreatedMergeRequest:
+        try:
+            data = self._request(
+                "GET",
+                f"/projects/{project_id}/merge_requests",
+                params={
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                    "state": "all",
+                },
+            )
+        except GitLabApiError as exc:
+            raise GitLabApiError(
+                "GitLab merge request response parsing "
+                f"failed: {parsing_error}. Could not "
+                "confirm whether the merge request was "
+                f"created: {exc}"
+            ) from parsing_error
+
+        created = None
+
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+
+                if item.get("iid") is None:
+                    continue
+
+                created = item
+                break
+
+        if created is None:
+            raise GitLabApiError(
+                "GitLab merge request response parsing "
+                f"failed: {parsing_error}, and no merge "
+                "request was found for "
+                f"{source_branch} -> {target_branch}. "
+                "Operation failed."
+            ) from parsing_error
+
+        return self._parse_created_merge_request(
+            created,
+            title=f"merge request from {source_branch}",
+            source_branch=source_branch,
+            target_branch=target_branch,
         )
 
     def get_merge_request_discussions(

@@ -78,12 +78,19 @@ Important rules:
 
 At the end, report:
 
-1. Whether the review comment was actionable.
-2. What files you changed.
-3. What you changed.
-4. Which tests/checks you ran.
-5. Whether those tests/checks passed.
-6. Any remaining concern that should be reviewed by a human.
+Your report must always be a direct, structured answer to the
+original review comment above. In that answer:
+
+1. Enumerate ALL possible causes of the reported issue: the actual
+   root cause, any contributing factors, and every plausible
+   alternative cause you checked and ruled out (state why each
+   alternative does or does not apply).
+2. State which single cause actually explains the observed problem.
+3. Whether the review comment was actionable.
+4. What files you changed (or state that no change was needed).
+5. What you changed.
+6. Which tests/checks you ran and whether they passed.
+7. Any remaining concern that should be reviewed by a human.
 
 If you changed the code, the very last line of your report must be:
 BRANCH: <short-descriptive-kebab-case-slug>
@@ -157,16 +164,21 @@ This is a READ-ONLY review pass. You must NOT modify any file.
 5. Provide evidence: cite the specific files, lines, functions,
    regular expressions, and test names that support your conclusion.
 
-Your final report must be a detailed, structured summary containing:
+Your final report must be a detailed, structured summary containing,
+as a direct answer to the original comment:
 
 1. The claim: exactly what the comment asserts.
-2. The verification: how you reverse-engineered the code and tests to
+2. All possible causes: enumerate every plausible cause of the
+   reported issue, including the ones you ruled out and why.
+3. The actual root cause: which single cause actually explains the
+   observed behaviour (or state that none of them apply).
+4. The verification: how you reverse-engineered the code and tests to
    check the claim (which files/tests you inspected and ran).
-3. The verdict: is the comment TRUE (real bug) or FALSE (already
+5. The verdict: is the comment TRUE (real bug) or FALSE (already
    correct / mistaken claim)? State this explicitly.
-4. The evidence: precise references (file paths, functions, exact
+6. The evidence: precise references (file paths, functions, exact
    regular expression, test names and their real pass/fail status).
-5. A recommendation: whether a code change is actually required here,
+7. A recommendation: whether a code change is actually required here,
    or whether the discussion can be closed as already-correct.
 
 Important rules:
