@@ -243,13 +243,25 @@ class GitLabClient:
 
         return merge_requests
 
-    def post_discussion_reply(
+    @staticmethod
+    def find_discussion_id_for_note(
+        discussions: list[Discussion],
+        note_id: int,
+    ) -> str | None:
+        for discussion in discussions:
+            for note in discussion.notes:
+                if note.id == note_id:
+                    return discussion.id
+
+        return None
+
+    def create_merge_request_note(
         self,
         project_id: int,
         merge_request_iid: int,
-        discussion_id: str,
         body: str,
     ) -> int | None:
+        """Create a new top-level merge request note."""
         data = self._request(
             "POST",
             (
@@ -257,10 +269,44 @@ class GitLabClient:
                 f"/merge_requests/{merge_request_iid}"
                 "/notes"
             ),
-            json={
-                "body": body,
-                "discussion_id": discussion_id,
-            },
+            json={"body": body},
+        )
+
+        if isinstance(data, dict) and data.get("id") is not None:
+            return int(data["id"])
+
+        return None
+
+    def post_discussion_reply(
+        self,
+        project_id: int,
+        merge_request_iid: int,
+        discussion_id: str | None,
+        body: str,
+    ) -> int | None:
+        """Reply inside an existing merge request discussion."""
+        if not discussion_id:
+            raise GitLabApiError(
+                "Cannot reply to a discussion without "
+                "a discussion_id. Use "
+                "create_merge_request_note() to create "
+                "a new top-level note instead."
+            )
+
+        encoded_discussion_id = quote(
+            discussion_id,
+            safe="",
+        )
+
+        data = self._request(
+            "POST",
+            (
+                f"/projects/{project_id}"
+                f"/merge_requests/{merge_request_iid}"
+                f"/discussions/{encoded_discussion_id}"
+                "/notes"
+            ),
+            json={"body": body},
         )
 
         if isinstance(data, dict) and data.get("id") is not None:

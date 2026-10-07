@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -869,6 +870,50 @@ def run_review(
     )
 
 
+def build_unique_branch_name(
+    git_manager: GitManager,
+    preferred_branch: str,
+    note_id: int | None,
+) -> str:
+    if git_manager.is_branch_free(preferred_branch):
+        return preferred_branch
+
+    if note_id is not None:
+        candidate = f"{preferred_branch}-c{note_id}"
+
+        if git_manager.is_branch_free(candidate):
+            print()
+            print(
+                "      Branch already exists. Using "
+                f"suffixed branch: {candidate}"
+            )
+
+            return candidate
+
+    suffix = int(time.time())
+
+    candidate = (
+        f"{preferred_branch}-"
+        f"{note_id if note_id is not None else 'ai'}-{suffix}"
+    )
+
+    candidate = candidate[:80]
+
+    if not git_manager.is_branch_free(candidate):
+        raise RuntimeError(
+            "Unable to build a free branch name for: "
+            f"{preferred_branch}"
+        )
+
+    print()
+    print(
+        "      Branch already exists. Using dated "
+        f"branch: {candidate}"
+    )
+
+    return candidate
+
+
 def run_agent(
     config: Config,
     client: GitLabClient,
@@ -876,6 +921,8 @@ def run_agent(
     repository_manager: RepositoryManager,
     opencode_runner: OpenCodeRunner,
     test_runner: TestRunner,
+    state_store: StateStore,
+    discussion_state: DiscussionState,
     project_name: str,
     project_url: str,
     merge_request_iid: int,
@@ -886,6 +933,7 @@ def run_agent(
     iteration: int,
     prompt: str,
     review_comment: str,
+    note_id: int | None,
 ) -> AgentOutcome:
     repository = prepare_repository(
         repository_manager=repository_manager,
@@ -999,12 +1047,18 @@ def run_agent(
             test_result
         )
 
+        state_store.record_tests_failed(discussion_state)
+        state_store.save()
+
         return AgentOutcome(
             comment=format_failure_comment(
                 agent_report=agent_report,
                 test_summary=test_summary,
             )
         )
+
+    state_store.record_tests_passed(discussion_state)
+    state_store.save()
 
     print()
     print(
@@ -1014,9 +1068,15 @@ def run_agent(
     agent_slug = extract_branch_slug(agent_report)
 
     if agent_slug is None:
-        new_branch = f"{source_branch}-AI_CHANGE"
+        preferred_branch = f"{source_branch}-AI_CHANGE"
     else:
-        new_branch = agent_slug
+        preferred_branch = agent_slug
+
+    new_branch = build_unique_branch_name(
+        git_manager=git_manager,
+        preferred_branch=preferred_branch,
+        note_id=note_id,
+    )
 
     commit_message = (
         f"fix: {new_branch} "
@@ -1029,6 +1089,9 @@ def run_agent(
         f"{commit_message}"
     )
 
+    state_store.record_commit_started(discussion_state)
+    state_store.save()
+
     commit_result = git_manager.create_commit(
         message=commit_message,
     )
@@ -1039,11 +1102,20 @@ def run_agent(
         f"{commit_result.commit_sha}"
     )
 
+    state_store.record_commit_created(
+        discussion_state,
+        commit_result.commit_sha,
+    )
+    state_store.save()
+
     print()
     print(
         "      Creating new branch from source: "
         f"{new_branch}"
     )
+
+    state_store.record_push_started(discussion_state)
+    state_store.save()
 
     git_manager.create_branch(
         branch=new_branch,
@@ -1063,15 +1135,30 @@ def run_agent(
         f"origin/{new_branch}"
     )
 
-    push_result = git_manager.push_to_branch(
-        branch=new_branch,
-    )
+    try:
+        push_result = git_manager.push_to_branch(
+            branch=new_branch,
+        )
+    except RuntimeError as exc:
+        print()
+        print(
+            "      → Push FAILED: "
+            f"origin/{new_branch}: {exc}"
+        )
+
+        state_store.record_push_failed(discussion_state)
+        state_store.save()
+
+        raise
 
     print()
     print(
         "      Push completed: "
         f"{push_result.commit_sha}"
     )
+
+    state_store.record_push_completed(discussion_state)
+    state_store.save()
 
     print()
     print(
@@ -1358,6 +1445,16 @@ def scan_gitlab(
                                 merge_request.sha,
                             )
 
+                            decision_engine.mark_decision_processed(
+                                discussion=discussion,
+                                discussion_state=(
+                                    discussion_state
+                                ),
+                                decision=decision,
+                            )
+
+                            state_store.save()
+
                         task = build_fix_prompt(
                             project_name=project.path,
                             merge_request_iid=(
@@ -1387,6 +1484,10 @@ def scan_gitlab(
                                 opencode_runner
                             ),
                             test_runner=test_runner,
+                            state_store=state_store,
+                            discussion_state=(
+                                discussion_state
+                            ),
                             project_name=project.path,
                             project_url=project_url,
                             merge_request_iid=(
@@ -1407,23 +1508,18 @@ def scan_gitlab(
                             review_comment=(
                                 decision.note.body
                             ),
+                            note_id=decision.note.id,
                         )
 
                         if not config.runtime.dry_run:
-                            decision_engine.mark_decision_processed(
-                                discussion=discussion,
-                                discussion_state=(
-                                    discussion_state
-                                ),
-                                decision=decision,
-                            )
-
                             state_store.record_completed_iteration(
                                 discussion_state,
                                 commit_sha=(
                                     outcome.commit_sha
                                 ),
                             )
+
+                            state_store.save()
 
                             if outcome.commit_sha:
                                 state_store.record_ai_commit(
@@ -1485,6 +1581,16 @@ def scan_gitlab(
                                 merge_request.sha,
                             )
 
+                            decision_engine.mark_decision_processed(
+                                discussion=discussion,
+                                discussion_state=(
+                                    discussion_state
+                                ),
+                                decision=decision,
+                            )
+
+                            state_store.save()
+
                         task = build_continue_prompt(
                             project_name=project.path,
                             merge_request_iid=(
@@ -1517,6 +1623,10 @@ def scan_gitlab(
                                 opencode_runner
                             ),
                             test_runner=test_runner,
+                            state_store=state_store,
+                            discussion_state=(
+                                discussion_state
+                            ),
                             project_name=project.path,
                             project_url=project_url,
                             merge_request_iid=(
@@ -1537,23 +1647,20 @@ def scan_gitlab(
                             review_comment=(
                                 original_comment
                             ),
+                            note_id=(
+                                decision.continue_note.id
+                            ),
                         )
 
                         if not config.runtime.dry_run:
-                            decision_engine.mark_decision_processed(
-                                discussion=discussion,
-                                discussion_state=(
-                                    discussion_state
-                                ),
-                                decision=decision,
-                            )
-
                             state_store.record_completed_iteration(
                                 discussion_state,
                                 commit_sha=(
                                     outcome.commit_sha
                                 ),
                             )
+
+                            state_store.save()
 
                             if outcome.commit_sha:
                                 state_store.record_ai_commit(
@@ -1599,6 +1706,17 @@ def scan_gitlab(
                             "      → Starting read-only "
                             f"review pass {iteration}"
                         )
+
+                        if not config.runtime.dry_run:
+                            decision_engine.mark_decision_processed(
+                                discussion=discussion,
+                                discussion_state=(
+                                    discussion_state
+                                ),
+                                decision=decision,
+                            )
+
+                            state_store.save()
 
                         task = build_review_prompt(
                             project_name=project.path,
@@ -1696,6 +1814,8 @@ def scan_gitlab(
                                     decision=decision,
                                 )
 
+                                state_store.save()
+
                                 post_explanation_comment(
                                     client=client,
                                     config=config,
@@ -1732,6 +1852,8 @@ def scan_gitlab(
                                 ),
                                 decision=decision,
                             )
+
+                            state_store.save()
 
                             post_explanation_comment(
                                 client=client,
@@ -1770,6 +1892,8 @@ def scan_gitlab(
                                 ),
                                 decision=decision,
                             )
+
+                            state_store.save()
 
         except GitLabApiError as exc:
             print(

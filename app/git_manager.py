@@ -224,6 +224,41 @@ class GitManager:
             message=message,
         )
 
+    def branch_exists(
+        self,
+        branch: str,
+    ) -> bool:
+        branch = validate_branch_name(branch)
+
+        result = self._run(
+            [
+                "git",
+                "show-ref",
+                "--verify",
+                "--quiet",
+                f"refs/heads/{branch}",
+            ],
+            check=False,
+        )
+
+        return result.returncode == 0
+
+    def is_branch_free(
+        self,
+        branch: str,
+    ) -> bool:
+        try:
+            branch = validate_branch_name(branch)
+        except RuntimeError:
+            return False
+
+        if self.branch_exists(branch):
+            return False
+
+        return (
+            self.get_remote_branch_sha(branch) is None
+        )
+
     def create_branch(
         self,
         branch: str,
